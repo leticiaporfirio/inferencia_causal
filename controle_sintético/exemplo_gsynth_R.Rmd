@@ -1,0 +1,348 @@
+---
+title: "Controle Sintético Escalonado (gsynth)"
+author: "Leticia"
+date: "2024-11-16"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Instalando pacotes
+
+```{r}
+library(gsynth)
+```
+
+# Dataframes
+
+```{r}
+data(gsynth)
+ls()
+```
+
+# Multiperiod DID
+
+Começamos com o primeiro exemplo, um conjunto de dados simulado descrito no artigo. Há 5 unidades tratadas, 45 unidades de controle e 30 períodos de tempo. O tratamento começa no Período 21 para todas as unidades tratadas, portanto, uma configuração DID multiperíodo é criada.
+
+```{r}
+head(simdata)
+```
+
+# Salvando o csv
+
+```{r}
+write.table(simdata, file = "simdata_gsynth.csv", sep = "\t", na = "", quote = FALSE)
+
+```
+
+
+# Visualizando os dados
+
+Antes de conduzirmos qualquer análise estatística, é útil visualizar a estrutura de dados e/ou identificar valores ausentes (se houver algum). Podemos fazer isso facilmente com a ajuda do pacote panelView . A figura a seguir mostra que: (1) há 5 unidades tratadas e 45 unidades de controle; (2) as unidades tratadas começam a ser tratadas no período 21; e (3) não há valores ausentes, o que é um caso raro.
+
+```{r}
+library(devtools)
+devtools::install_github('xuyiqing/panelView')   # if not already installed
+library(panelView)
+#> ## See bit.ly/panelview4r for more info.
+#> ## Report bugs -> yiqingxu@stanford.edu.
+panelview(Y ~ D, data = simdata,  index = c("id","time"), pre.post = TRUE) 
+```
+
+
+A linha de código a seguir visualiza a variável de resultado; cores diferentes correspondem a diferentes status de tratamento.
+
+```{r}
+panelview(Y ~ D, data = simdata,  index = c("id","time"), type = "outcome") 
+```
+# Estimativa
+
+```{r}
+system.time(
+    out <- gsynth(Y ~ D + X1 + X2, data = simdata, 
+                  index = c("id","time"), force = "two-way", 
+                  CV = TRUE, r = c(0, 5), se = TRUE, 
+                  inference = "parametric", nboots = 1000, 
+                  parallel = FALSE)
+)
+```
+
+```{r}
+print(out)
+out$est.att
+out$est.avg
+out$est.beta
+```
+
+A computação paralela acelerará significativamente o procedimento de bootstrap. Quando parallel = TRUE(padrão) e coresopções são omitidas, o algoritmo detectará o número de núcleos disponíveis no seu computador automaticamente. (Aviso: pode consumir a maior parte do poder computacional do seu computador se todos os núcleos estiverem sendo usados.)
+
+```{r}
+system.time(
+out <- gsynth(Y ~ D + X1 + X2, data = simdata,
+              index = c("id","time"), force = "two-way", 
+              CV = TRUE, r = c(0, 5), se = TRUE, 
+              inference = "parametric", nboots = 1000, 
+              parallel = TRUE, cores = 4)
+)
+```
+O gsynth também incorpora o método jackknife para estimativas de incerteza.
+
+```{r}
+out2 <- gsynth(Y ~ D + X1 + X2, data = simdata, 
+               index = c("id","time"), force = "two-way", 
+               CV = FALSE, r = c(2, 5), se = TRUE,
+               inference = "jackknife", 
+               parallel = TRUE, cores = 4)
+```
+Às vezes, os pesquisadores podem estar interessados ​​em efeitos cumulativos de tratamento, como retornos anormais cumulativos em estudo de eventos. Nesta versão, adicionamos uma função simples cumuEff para calcular efeitos cumulativos de tratamento. Pode-se especificar um período de interesse na opção period. Se deixado em branco, os efeitos cumulativos de tratamento para todo o período pós-tratamento serão calculados.
+
+```{r}
+cumu1 <- cumuEff(out, cumu = TRUE, id = NULL, period = c(0,5))
+cumu1$est.catt
+```
+
+Também é possível calcular o efeito médio do tratamento para um subgrupo especificando nomes de unidades na opção id. Ao especificar cumu = FALSE, os efeitos médios do tratamento (em vez de efeitos cumulativos) em cada período serão retornados. Observe que, neste caso, o procedimento bootstrap paramétrico é necessário para estimativas de incerteza.
+
+
+```{r}
+cumu2 <- cumuEff(out, cumu = FALSE, id = c(101, 102, 103), period = c(0,5))
+cumu2$est.catt
+```
+
+# Resultados do Gráfico
+
+```{r}
+plot(out) # by default
+```
+Os usuários podem ajustar xlime ylim, e fornecer o título do gráfico e títulos para os dois eixos.
+
+
+```{r}
+plot(out, type = "gap", ylim = c(-3,12), xlab = "Period", 
+     main = "My GSynth Plot")
+```
+As outras quatro typeopções incluem "raw", que plota a variável de dados brutos (resultado) como panelview() faz; "counterfactual"(ou "ct"para abreviar), que plota o(s) contrafactual(ais) estimado(s); e "factors"e "loadings", que plotam fatores e cargas estimados, respectivamente. A próxima figura é um gráfico bruto com um tema preto e branco. As unidades tratadas (pré e pós-tratamento) e de controle são pintadas com cores diferentes.
+
+```{r}
+plot(out, type = "raw")
+```
+
+Podemos definir os limites dos eixos, remover a legenda e o título, por exemplo, digitando (figura não mostrada):
+
+
+```{r}
+plot(out,type = "raw", legendOff = TRUE, ylim=c(-10,40), main="")
+
+```
+
+Usamos a seguinte linha de comando para traçar o contrafactual estimado. raw = "none"(a opção padrão) significa que não incluímos os dados brutos nesta figura:
+
+```{r}
+plot(out, type = "counterfactual", raw = "none", main="")
+
+```
+
+Pode ser usado shade.postpara controlar o sombreamento no período pós-tratamento
+
+```{r}
+plot(out, type = "ct", raw = "none", main = "", 
+     shade.post = FALSE)
+```
+
+Também podemos adicionar duas faixas de quantis de 5 a 95% dos resultados tratados e de controle como referências para garantir que os contrafactuais estimados não sejam resultados de extrapolações severas.
+
+```{r}
+plot(out, type = "counterfactual", raw = "band", 
+     xlab = "Time", ylim = c(-5,35))
+```
+
+… ou simplesmente plotar todos os dados brutos (para a variável de resultado).
+
+```{r}
+plot(out, type = "counterfactual", raw = "all")
+
+```
+
+Também é possível visualizar o contrafactual estimado para cada unidade tratada para avaliar a qualidade do ajuste do modelo.
+
+```{r}
+plot(out, type = "counterfactual", id = 102)
+
+```
+
+Podemos adicionar a faixa de referência, uma faixa de quantil de 5 a 95% aos resultados de controle.
+
+```{r}
+plot(out, type = "counterfactual", id = 104, 
+     raw = "band", ylim = c(-10, 30))
+```
+
+# DID Escalonado
+
+O segundo exemplo investiga o efeito das reformas do Election-Day Registration (EDR) na participação eleitoral nos Estados Unidos. Note que o tratamento entra em ação em momentos diferentes.
+
+```{r}
+data(gsynth)
+names(turnout)
+```
+
+# Salvando o CSV 
+
+```{r}
+write.table(turnout, file = "turnout_gsynth.csv", sep = "\t", na = "", quote = FALSE)
+
+```
+
+
+Primeiro, damos uma olhada na estrutura de dados. A figura a seguir mostra que (1) temos um painel balanceado com 9 unidades tratadas e (2) o tratamento começa em diferentes períodos de tempo.
+
+```{r}
+panelview(turnout ~ policy_edr, data = turnout, 
+          index = c("abb","year"), pre.post = TRUE, 
+          by.timing = TRUE) 
+```
+O painel também pode visualizar a variável de resultado por grupo (mudança no status do tratamento).
+
+```{r}
+panelview(turnout ~ policy_edr, data = turnout, 
+          index = c("abb","year"), type = "outcome", 
+          main = "EDR Reform and Turnout", 
+          by.group = TRUE)
+```
+
+Quando nenhum fator é assumido, as estimativas são próximas do que obtemos da diferença em diferenças:
+
+```{r}
+out0 <- gsynth(turnout ~ policy_edr + policy_mail_in + policy_motor, 
+               data = turnout, index = c("abb","year"), 
+               se = TRUE, inference = "parametric", 
+               r = 0, CV = FALSE, force = "two-way", 
+               nboots = 1000, seed = 02139)
+```
+```{r}
+out0
+```
+
+
+```{r}
+plot(out0, type = "gap", xlim = c(-15, 15))
+```
+
+# Estimativa com fatores
+
+Agora permitimos que o algoritmo encontre o número “correto” de fatores que prevê melhor os dados de pré-tratamento:
+
+```{r}
+out <- gsynth(turnout ~ policy_edr + policy_mail_in + policy_motor, 
+              data = turnout,  index = c("abb","year"), 
+              se = TRUE, inference = "parametric", 
+              r = c(0, 5), CV = TRUE, force = "two-way", 
+              nboots = 1000, seed = 02139)
+```
+
+```{r}
+print(out)
+out$est.att
+out$est.avg
+out$est.beta
+```
+
+
+# Pesos Implicitos
+
+out$wgt.implied (Nco×Ntr) armazena os pesos implícitos de todas as unidades de controle para cada unidade tratada. Diferente do método de controle sintético, os pesos podem ser positivos e negativos. Abaixo mostramos os pesos da unidade de controle para Wisconsin.
+
+```{r}
+dim(out$wgt.implied)
+
+sort(out$wgt.implied[,8])
+
+
+```
+# Resultados do Gráfico 
+
+O gráfico de dados faltantes também pode ser produzido após a estimativa ser realizada. Além disso, o gráfico permite que os usuários alterem os rótulos dos eixos e o título do gráfico (figura não mostrada).
+
+```{r}
+plot(out, type = "missing", main = "Treatment Status",
+     xlab = "Year", ylab = "State")
+```
+A seguinte linha de código produz o gráfico de “lacuna”:
+
+```{r}
+plot(out, type = "gap", xlim = c(-10, 5), ylim=c(-15,15))
+```
+Se quisermos saber o efeito do tratamento em um estado específico, como Wisconsin, podemos especificar a id opção: 
+
+```{r}
+plot(out, type = "gap", id = "WI", main = "Wisconsin")
+
+```
+Traçando os dados brutos de participação:
+
+
+```{r}
+plot(out, type = "raw", xlab = "Year", ylab = "Turnout")
+
+```
+```{r}
+plot(out, type = "counterfactual", raw = "all")
+
+```
+Podemos traçar contrafactuais estimados para cada unidade tratada:
+
+```{r}
+plot(out, type="counterfactual", id = "CT")
+```
+```{r}
+plot(out, type = "counterfactual", id = "WY", 
+     raw = "all", legendOff = TRUE)
+```
+
+```{r}
+plot(out, type = "counterfactual", id = "WI", 
+     raw = "none", shade.post = FALSE, ylim = c(0,100),
+     legend.labs = c("Wisconsin Actual","Wisconsin Counterfactural"))
+```
+
+Fatores estimados e cargas fatoriais::
+
+```{r}
+plot(out, type = "factors", xlab="Year")
+
+```
+
+```{r}
+plot(out, type = "loadings")
+```
+
+# Painéis desbalanceados
+
+A partir da v1.0.7, o gsynth pode acomodar painéis desbalanceados. Para ilustrar como funciona, removemos aleatoriamente 50 observações, bem como as primeiras 15 observações de Wyoming, do conjunto de dados de comparecimento e, em seguida, reestimamos o modelo:
+
+
+```{r}
+set.seed(123456)
+turnout.ub <- turnout[-c(which(turnout$abb=="WY")[1:15], 
+                         sample(1:nrow(turnout),50,replace=FALSE)),]
+```
+
+Novamente, antes de executar qualquer regressão, primeiro plotamos a estrutura de dados e visualizamos valores ausentes. No gráfico a seguir, as células brancas representam valores ausentes.
+
+```{r}
+panelview(turnout ~ policy_edr + policy_mail_in + policy_motor, 
+          data = turnout.ub,  index = c("abb","year"), 
+          pre.post = TRUE)
+```
+
+```{r}
+out <- gsynth(turnout ~ policy_edr + policy_mail_in + policy_motor, 
+              data = turnout.ub,  index = c("abb","year"), 
+              se = TRUE, inference = "parametric", 
+              r = c(0, 5), CV = TRUE, force = "two-way", 
+              parallel = TRUE, min.T0 = 8, 
+              nboots = 1000, seed = 02139)
+```
+
